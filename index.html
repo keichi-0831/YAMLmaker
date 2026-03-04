@@ -98,6 +98,8 @@
         .btn-sync-del:hover { background: #ffe0e0; }
         .btn-sync-pull { background: #f0f0f0; color: var(--text-main); }
         .btn-sync-pull:hover { background: #e0e0e0; }
+        .btn-sync-upload { background: #e8f5e9; color: #1b7f46; border: 1px solid #bfe7cc; }
+        .btn-sync-upload:hover { background: #d8efdf; }
 
         /* ===== 角色管理栏 ===== */
         .char-manager {
@@ -1073,7 +1075,8 @@
         <select id="syncIdSelect" onchange="switchSyncId(this.value)"></select>
         <button type="button" class="btn-sync btn-sync-add" onclick="addSyncId()">＋ 新增ID</button>
         <button type="button" class="btn-sync btn-sync-del" onclick="deleteSyncId()">🗑️ 删除ID</button>
-        <button type="button" class="btn-sync btn-sync-pull" onclick="reloadCloudForCurrentId()">☁️ 拉取云端</button>
+        <button type="button" class="btn-sync btn-sync-pull" onclick="restoreSyncForCurrentId()">☁️ 恢复同步</button>
+        <button type="button" class="btn-sync btn-sync-upload" onclick="saveUploadForCurrentId()">☁️ 保存上传</button>
     </div>
 
     <!-- 角色管理栏 -->
@@ -2156,12 +2159,16 @@ const LS_SYNC_USER = 'sync_user_id';
 const LS_SYNC_USERS = 'sync_user_ids';
 const LS_SYNC_USER_CURRENT = 'sync_user_id_current';
 const LS_VISITOR_ID = 'unique_visitor_id';
+const CLOUD_META_CONFIG_ID = '__cloud_meta_config__';
 
 const SUPABASE_URL = 'https://cukfyqnrsrikimipbyrh.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN1a2Z5cW5yc3Jpa2ltaXBieXJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2MjY2MTEsImV4cCI6MjA4ODIwMjYxMX0.Dj7zH_OGJZ5X2jJolRXx4nTnOKN4_rUnRvboUm0-OoU';
 
 let supabaseClient = null;
 let syncUserId = '';
+let configSyncTimer = null;
+let isApplyingCloudConfig = false;
+let hasPendingCloudChanges = false;
 
 // ============================================================
 //  角色管理
@@ -2209,6 +2216,7 @@ function switchCharacter(newId) {
     if (oldId) saveCurrentCharData(oldId);
     setCurrentId(newId);
     loadCharacter(newId);
+    scheduleCloudConfigSync();
 }
 
 function newCharacter() {
@@ -2223,6 +2231,7 @@ function newCharacter() {
     setCurrentId(id);
     renderCharSelect(chars, id);
     clearFormFields();
+    scheduleCloudConfigSync();
     showToast('✨ 已新建角色：' + name);
 }
 
@@ -2251,6 +2260,7 @@ function deleteCharacter() {
     setCurrentId(newId);
     renderCharSelect(chars, newId);
     loadCharacter(newId);
+    scheduleCloudConfigSync();
     showToast('🗑️ 角色已删除');
 }
 
@@ -2353,7 +2363,7 @@ function triggerAutoSave() {
         const id = getCurrentId();
         if (id) {
             saveCurrentCharData(id);
-            syncCurrentCharacterToCloud(id);
+            scheduleCloudConfigSync();
         }
         setSaveStatus('saved');
     }, 900);
@@ -2426,6 +2436,146 @@ function getLastRolledInspo() {
 }
 function saveLastRolledInspo(words) {
     localStorage.setItem(LS_INSPO_LAST_ROLL, JSON.stringify(words || []));
+}
+
+function getCloudMetaConfigSnapshot() {
+    const getVal = (id, fallback = '') => {
+        const el = document.getElementById(id);
+        return el ? el.value : fallback;
+    };
+    const getChecked = (id, fallback = false) => {
+        const el = document.getElementById(id);
+        return el ? !!el.checked : fallback;
+    };
+
+    const moduleChecks = {};
+    document.querySelectorAll('input[name="aiModule"]').forEach(el => {
+        moduleChecks[el.value] = !!el.checked;
+    });
+
+    const moduleGuides = {};
+    ['basic','background','appearance','personality','user_relation','behavior','speech','extra','nsfw'].forEach(k => {
+        moduleGuides[k] = getVal('guide_' + k, '');
+    });
+
+    return {
+        version: 1,
+        currentCharId: getCurrentId(),
+        inspoPool: getInspoPool(),
+        lastRolledInspo: getLastRolledInspo(),
+        namer: {
+            surnames: getNamerPool('surname'),
+            charnames: getNamerPool('charname'),
+            nameLength: getVal('nameLength', '3'),
+            nameCount: getVal('nameCount', '6'),
+            nameNoDuplicate: getChecked('nameNoDuplicate', true),
+        },
+        ai: {
+            providers: getProviders(),
+            currentProviderId: getCurrentProviderId(),
+            selectedModel,
+            persona: getVal('aiPersona', ''),
+            xpCore: getVal('aiXpCore', ''),
+            instructions: getVal('aiInstructions', ''),
+            sendTropeToAi: getChecked('sendTropeToAi', true),
+            enableStream: getChecked('enableStream', true),
+            moduleChecks,
+            moduleGuides,
+        }
+    };
+}
+
+function applyCloudMetaConfig(cfg) {
+    if (!cfg || typeof cfg !== 'object') return;
+    isApplyingCloudConfig = true;
+    try {
+        if (Array.isArray(cfg.inspoPool)) localStorage.setItem(LS_INSPO, JSON.stringify(cfg.inspoPool));
+        if (Array.isArray(cfg.lastRolledInspo)) localStorage.setItem(LS_INSPO_LAST_ROLL, JSON.stringify(cfg.lastRolledInspo));
+
+        if (cfg.namer && typeof cfg.namer === 'object') {
+            if (Array.isArray(cfg.namer.surnames)) localStorage.setItem(LS_SURNAMES, JSON.stringify(cfg.namer.surnames));
+            if (Array.isArray(cfg.namer.charnames)) localStorage.setItem(LS_CHARNAMES, JSON.stringify(cfg.namer.charnames));
+            const nameLengthEl = document.getElementById('nameLength');
+            const nameCountEl = document.getElementById('nameCount');
+            const nameNoDupEl = document.getElementById('nameNoDuplicate');
+            if (nameLengthEl && cfg.namer.nameLength !== undefined) nameLengthEl.value = String(cfg.namer.nameLength);
+            if (nameCountEl && cfg.namer.nameCount !== undefined) nameCountEl.value = String(cfg.namer.nameCount);
+            if (nameNoDupEl && cfg.namer.nameNoDuplicate !== undefined) nameNoDupEl.checked = !!cfg.namer.nameNoDuplicate;
+        }
+
+        if (cfg.ai && typeof cfg.ai === 'object') {
+            if (cfg.ai.providers && typeof cfg.ai.providers === 'object') {
+                localStorage.setItem(LS_AI_PROVIDERS, JSON.stringify(cfg.ai.providers));
+            }
+            if (cfg.ai.currentProviderId) {
+                localStorage.setItem(LS_AI_CURRENT_P, String(cfg.ai.currentProviderId));
+            }
+            if (cfg.ai.selectedModel !== undefined) selectedModel = cfg.ai.selectedModel || '';
+
+            const setVal = (id, val) => {
+                const el = document.getElementById(id);
+                if (el && val !== undefined && val !== null) el.value = val;
+            };
+            const setChecked = (id, val) => {
+                const el = document.getElementById(id);
+                if (el && val !== undefined) el.checked = !!val;
+            };
+            setVal('aiPersona', cfg.ai.persona);
+            setVal('aiXpCore', cfg.ai.xpCore);
+            setVal('aiInstructions', cfg.ai.instructions);
+            setChecked('sendTropeToAi', cfg.ai.sendTropeToAi);
+            setChecked('enableStream', cfg.ai.enableStream);
+
+            if (cfg.ai.moduleChecks && typeof cfg.ai.moduleChecks === 'object') {
+                document.querySelectorAll('input[name="aiModule"]').forEach(el => {
+                    if (cfg.ai.moduleChecks[el.value] !== undefined) {
+                        el.checked = !!cfg.ai.moduleChecks[el.value];
+                    }
+                });
+            }
+            if (cfg.ai.moduleGuides && typeof cfg.ai.moduleGuides === 'object') {
+                Object.entries(cfg.ai.moduleGuides).forEach(([k, v]) => {
+                    const el = document.getElementById('guide_' + k);
+                    if (el && v !== undefined && v !== null) el.value = String(v);
+                });
+            }
+        }
+
+        if (cfg.currentCharId) {
+            setCurrentId(cfg.currentCharId);
+        }
+    } finally {
+        isApplyingCloudConfig = false;
+    }
+
+    renderInspoTags();
+    renderCurrentInspoDisplay();
+    renderNamerTags('surname');
+    renderNamerTags('charname');
+    initProviderSystem();
+    updateModulePreview();
+}
+
+function scheduleCloudConfigSync() {
+    if (isApplyingCloudConfig) return;
+    hasPendingCloudChanges = true;
+    clearTimeout(configSyncTimer);
+    configSyncTimer = setTimeout(() => {
+        // 改为手动上传：仅标记本地有待上传变更，不自动推送到云端
+    }, 700);
+}
+
+function syncCloudMetaConfigToCloud() {
+    if (!supabaseClient || !syncUserId) return;
+    const snapshot = getCloudMetaConfigSnapshot();
+    supabaseClient
+        .from('character_cards')
+        .upsert([
+            { user_id: syncUserId, char_id: CLOUD_META_CONFIG_ID, char_data: snapshot }
+        ], { onConflict: 'user_id,char_id' })
+        .then(({ error }) => {
+            if (error) console.warn('[Cloud Config Upsert Error]', error.message);
+        });
 }
 
 function renderCurrentInspoDisplay() {
@@ -2537,7 +2687,7 @@ function ensureSyncIdSystem() {
 function switchSyncId(newId) {
     if (!newId || newId === getCurrentSyncId()) return;
     setCurrentSyncId(newId);
-    reloadCloudForCurrentId();
+    showToast('已切换同步ID，可点击“恢复同步”读取云端，或“保存上传”推送本地数据');
 }
 
 function addSyncId() {
@@ -2547,14 +2697,12 @@ function addSyncId() {
     if (ids.includes(input)) {
         setCurrentSyncId(input);
         showToast('该ID已存在，已切换到此ID');
-        reloadCloudForCurrentId();
         return;
     }
     ids.push(input);
     saveSyncIds(ids);
     setCurrentSyncId(input);
-    showToast('✨ 已新增并切换到ID：' + input);
-    reloadCloudForCurrentId();
+    showToast('✨ 已新增并切换到ID：' + input + '，可手动“恢复同步”或“保存上传”');
 }
 
 function deleteSyncId() {
@@ -2570,16 +2718,78 @@ function deleteSyncId() {
     saveSyncIds(nextIds);
     setCurrentSyncId(nextIds[0]);
     showToast('🗑️ 已删除ID，已切换到：' + nextIds[0]);
-    reloadCloudForCurrentId();
 }
 
-async function reloadCloudForCurrentId() {
+async function restoreSyncForCurrentId() {
     initSupabaseClient();
     syncUserId = getCurrentSyncId();
     updateCurrentSyncIdDisplay();
     if (!supabaseClient || !syncUserId) return;
-    await pullCloudCharacters();
+    if (!confirm('恢复同步将以云端数据覆盖当前浏览器本地缓存。确定继续吗？')) return;
+    await pullCloudCharacters(true);
+    hasPendingCloudChanges = false;
     await updateAdminViewCount();
+}
+
+async function saveUploadForCurrentId() {
+    initSupabaseClient();
+    syncUserId = getCurrentSyncId();
+    updateCurrentSyncIdDisplay();
+    if (!supabaseClient || !syncUserId) {
+        showToast('未连接云端或同步ID为空');
+        return;
+    }
+
+    const currentId = getCurrentId();
+    if (currentId) saveCurrentCharData(currentId);
+
+    const chars = getChars();
+    const rows = Object.entries(chars).map(([charId, charData]) => ({
+        user_id: syncUserId,
+        char_id: charId,
+        char_data: charData
+    }));
+
+    rows.push({
+        user_id: syncUserId,
+        char_id: CLOUD_META_CONFIG_ID,
+        char_data: getCloudMetaConfigSnapshot()
+    });
+
+    const { error: upsertError } = await supabaseClient
+        .from('character_cards')
+        .upsert(rows, { onConflict: 'user_id,char_id' });
+
+    if (upsertError) {
+        console.warn('[Cloud Save Upload Error]', upsertError.message);
+        showToast('❌ 保存上传失败：' + upsertError.message);
+        return;
+    }
+
+    const { data: cloudRows, error: listError } = await supabaseClient
+        .from('character_cards')
+        .select('char_id')
+        .eq('user_id', syncUserId);
+
+    if (!listError && Array.isArray(cloudRows)) {
+        const localIds = new Set(Object.keys(chars));
+        localIds.add(CLOUD_META_CONFIG_ID);
+        const staleIds = cloudRows
+            .map(r => r && r.char_id)
+            .filter(id => id && !localIds.has(id));
+
+        if (staleIds.length > 0) {
+            const { error: delError } = await supabaseClient
+                .from('character_cards')
+                .delete()
+                .eq('user_id', syncUserId)
+                .in('char_id', staleIds);
+            if (delError) console.warn('[Cloud Cleanup Error]', delError.message);
+        }
+    }
+
+    hasPendingCloudChanges = false;
+    showToast(`☁️ 已保存上传 ${Object.keys(chars).length} 个角色到云端`);
 }
 
 function normalizeCloudChar(charId, charData) {
@@ -2592,7 +2802,7 @@ function normalizeCloudChar(charId, charData) {
     };
 }
 
-async function pullCloudCharacters() {
+async function pullCloudCharacters(overwriteLocal = false) {
     if (!supabaseClient || !syncUserId) return;
     const { data, error } = await supabaseClient
         .from('character_cards')
@@ -2601,24 +2811,40 @@ async function pullCloudCharacters() {
 
     if (error) {
         console.warn('[Cloud Pull Error]', error.message);
+        showToast('❌ 云端恢复失败：' + error.message);
         return;
     }
-    if (!data || data.length === 0) return;
+    if (!data || data.length === 0) {
+        showToast('☁️ 云端暂无可恢复数据');
+        return;
+    }
 
-    const chars = getChars();
+    const chars = overwriteLocal ? {} : getChars();
+    let cloudMetaCfg = null;
     data.forEach(row => {
         if (!row?.char_id) return;
+        if (row.char_id === CLOUD_META_CONFIG_ID) {
+            cloudMetaCfg = row.char_data;
+            return;
+        }
         chars[row.char_id] = normalizeCloudChar(row.char_id, row.char_data);
     });
 
     saveChars(chars);
-    const firstId = Object.keys(chars)[0];
-    if (firstId) {
-        setCurrentId(firstId);
-        renderCharSelect(chars, firstId);
-        loadCharacter(firstId);
+    if (cloudMetaCfg) {
+        applyCloudMetaConfig(cloudMetaCfg);
     }
-    showToast(`☁️ 已同步 ${data.length} 个云端角色`);
+
+    let nextId = getCurrentId();
+    if (!nextId || !chars[nextId]) nextId = Object.keys(chars)[0];
+    if (nextId) {
+        setCurrentId(nextId);
+        renderCharSelect(chars, nextId);
+        loadCharacter(nextId);
+    }
+
+    const roleCount = data.filter(r => r?.char_id && r.char_id !== CLOUD_META_CONFIG_ID).length;
+    showToast(`☁️ 已同步 ${roleCount} 个云端角色`);
 }
 
 function syncCurrentCharacterToCloud(charId) {
@@ -2685,7 +2911,6 @@ async function initCloudSync() {
     if (!supabaseClient || !syncUserId) return;
 
     await trackUniqueVisitor();
-    await pullCloudCharacters();
     await updateAdminViewCount();
 }
 
@@ -2713,7 +2938,7 @@ function addInspoWord() {
     const word = input.value.trim();
     if (!word) return;
     const pool = getInspoPool();
-    if (!pool.includes(word)) { pool.push(word); saveInspoPool(pool); renderInspoTags(); }
+    if (!pool.includes(word)) { pool.push(word); saveInspoPool(pool); renderInspoTags(); scheduleCloudConfigSync(); }
     input.value = ''; input.focus();
 }
 
@@ -2729,6 +2954,7 @@ function removeInspoWord(index, event) {
     saveLastRolledInspo(current);
     renderInspoTags();
     renderCurrentInspoDisplay();
+    scheduleCloudConfigSync();
 }
 
 function toggleCurrentInspoWord(word) {
@@ -2739,12 +2965,14 @@ function toggleCurrentInspoWord(word) {
     saveLastRolledInspo(current);
     renderInspoTags();
     renderCurrentInspoDisplay();
+    scheduleCloudConfigSync();
 }
 
 function clearCurrentInspo() {
     saveLastRolledInspo([]);
     renderInspoTags();
     renderCurrentInspoDisplay();
+    scheduleCloudConfigSync();
     showToast('🧹 已清空灵感时刻');
 }
 
@@ -2753,6 +2981,7 @@ function clearInspoPool() {
     saveInspoPool([]); renderInspoTags();
     saveLastRolledInspo([]);
     renderCurrentInspoDisplay();
+    scheduleCloudConfigSync();
     document.getElementById('inspoRollResult').innerHTML = '<span class="inspo-roll-empty">词库已清空</span>';
 }
 
@@ -2767,6 +2996,7 @@ function confirmBatchImport() {
     let added = 0;
     words.forEach(w => { if (!pool.includes(w)) { pool.push(w); added++; } });
     saveInspoPool(pool); renderInspoTags(); closeImportModal();
+    scheduleCloudConfigSync();
     showToast(`✅ 导入了 ${added} 个词语`);
 }
 
@@ -2779,6 +3009,7 @@ function importFromFile(event) {
         const pool = getInspoPool(); let added = 0;
         words.forEach(w => { if (!pool.includes(w)) { pool.push(w); added++; } });
         saveInspoPool(pool); renderInspoTags();
+        scheduleCloudConfigSync();
         showToast(`📁 从文件导入了 ${added} 个词语`);
     };
     reader.readAsText(file, 'UTF-8'); event.target.value = '';
@@ -2804,6 +3035,7 @@ function rollInspo() {
     const picked = shuffled.slice(0, count);
     saveLastRolledInspo(picked);
     renderCurrentInspoDisplay();
+    scheduleCloudConfigSync();
     const result = document.getElementById('inspoRollResult');
     result.innerHTML = '';
     picked.forEach((word, i) => {
@@ -2829,6 +3061,7 @@ function getNamerPool(type) {
 }
 function saveNamerPool(type, pool) {
     localStorage.setItem(type === 'surname' ? LS_SURNAMES : LS_CHARNAMES, JSON.stringify(pool));
+    scheduleCloudConfigSync();
 }
 
 function renderNamerTags(type) {
@@ -2985,6 +3218,7 @@ function saveCurrentProviderConfig() {
     providers[id].apiKey  = document.getElementById('aiApiKey').value.trim();
     providers[id].selectedModel = selectedModel || '';
     saveProviders(providers);
+    scheduleCloudConfigSync();
 }
 
 function newProvider() {
@@ -3058,6 +3292,7 @@ function renderModelList(models) {
         card.onclick = () => {
             document.querySelectorAll('.model-card').forEach(c => c.classList.remove('selected'));
             card.classList.add('selected'); selectedModel = id;
+            scheduleCloudConfigSync();
         };
         list.appendChild(card);
         if (!selectedModel) card.click();
