@@ -1791,7 +1791,7 @@
                 </div>
                 <div class="ai-config-grid">
                     <div class="form-group">
-                        <label>API 地址</label>
+                        <label>API 地址（不要加/v1）</label>
                         <input type="text" id="aiBaseUrl" placeholder="https://api.openai.com" oninput="saveCurrentProviderConfig()">
                     </div>
                     <div class="form-group">
@@ -1848,6 +1848,13 @@
                 <!-- 需求2: 细化为每个部分的引导词，各自可勾选 -->
                 <div class="ai-block">
                     <div class="ai-block-label">📦 让 AI 帮我生成的模块 <span style="font-size:0.75rem;color:var(--text-sub);font-weight:400;">（勾选后展开编辑引导词，选了多少就发多少给AI）</span></div>
+
+                    <div class="ai-block-hint" style="margin-bottom:10px;">
+                        <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;color:var(--text-main);">
+                            <input type="checkbox" id="includeExistingContentToAi" checked onchange="scheduleCloudConfigSync()" style="accent-color: var(--primary-color);">
+                            将该部分已填写内容一并提供给 AI 参考（用于补全剩余内容）
+                        </label>
+                    </div>
 
                     <div class="ai-guide-module">
                         <label class="ai-guide-header">
@@ -1973,7 +1980,7 @@
 
                 <div class="ai-block">
                     <div class="ai-block-label"><span class="ai-tag-badge">instructions</span> 填卡说明 &amp; 回复格式（可自定义）</div>
-                    <textarea id="aiInstructions" rows="10">请严格按照以下JSON格式回复，不要包含任何其他文字或markdown标记。只需填写被请求的模块，其余留空。列表字段提供2-5个条目，描述精炼有层次感。
+                    <textarea id="aiInstructions" rows="10">请严格按照以下JSON格式回复，不要包含任何其他文字或markdown标记。只需填写被请求的模块，其余留空。列表字段提供2-5个条目，描述精炼有层次感。若表单已有部分内容，你需要进行参考并补全要求的内容。
 
 {
   "basic": { "char_name":"", "chinese_name":"", "nickname":"", "age":"", "birthday_date":"", "birthday_zodiac":"", "gender":"", "height":"", "identity":[], "archetype":[], "social":[] },
@@ -2478,6 +2485,7 @@ function getCloudMetaConfigSnapshot() {
             xpCore: getVal('aiXpCore', ''),
             instructions: getVal('aiInstructions', ''),
             sendTropeToAi: getChecked('sendTropeToAi', true),
+            includeExistingContentToAi: getChecked('includeExistingContentToAi', true),
             enableStream: getChecked('enableStream', true),
             moduleChecks,
             moduleGuides,
@@ -2524,6 +2532,7 @@ function applyCloudMetaConfig(cfg) {
             setVal('aiXpCore', cfg.ai.xpCore);
             setVal('aiInstructions', cfg.ai.instructions);
             setChecked('sendTropeToAi', cfg.ai.sendTropeToAi);
+            setChecked('includeExistingContentToAi', cfg.ai.includeExistingContentToAi);
             setChecked('enableStream', cfg.ai.enableStream);
 
             if (cfg.ai.moduleChecks && typeof cfg.ai.moduleChecks === 'object') {
@@ -3303,6 +3312,92 @@ function getSelectedModules() {
     return Array.from(document.querySelectorAll('input[name="aiModule"]:checked')).map(el => el.value);
 }
 
+function pruneEmptyDeep(value) {
+    if (Array.isArray(value)) {
+        const arr = value
+            .map(v => pruneEmptyDeep(v))
+            .filter(v => !(v === '' || v === null || v === undefined || (Array.isArray(v) && v.length === 0) || (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0)));
+        return arr;
+    }
+    if (value && typeof value === 'object') {
+        const out = {};
+        Object.entries(value).forEach(([k, v]) => {
+            const cleaned = pruneEmptyDeep(v);
+            const isEmpty = cleaned === '' || cleaned === null || cleaned === undefined || (Array.isArray(cleaned) && cleaned.length === 0) || (typeof cleaned === 'object' && !Array.isArray(cleaned) && Object.keys(cleaned).length === 0);
+            if (!isEmpty) out[k] = cleaned;
+        });
+        return out;
+    }
+    return typeof value === 'string' ? value.trim() : value;
+}
+
+function buildExistingContentForModules(modules) {
+    const f = serializeForm();
+    const arr = (k) => (f[k] || []).map(v => String(v || '').trim()).filter(Boolean);
+    const out = {};
+
+    if (modules.includes('basic')) {
+        out.basic = {
+            char_name: f.char_name || '', chinese_name: f.chinese_name || '', nickname: f.nickname || '', age: f.age || '',
+            birthday_date: f.birthday_date || '', birthday_zodiac: f.birthday_zodiac || '', gender: f.gender || '', height: f.height || '',
+            identity: arr('identity-container'), archetype: arr('archetype-container'), social: arr('social-container')
+        };
+    }
+    if (modules.includes('background')) {
+        out.background = {
+            childhood_range: f.age_range_childhood || '', childhood: arr('childhood-container'),
+            teenage_range: f.age_range_teenage || '', teenage: arr('teenage-container'),
+            youth_range: f.age_range_youth || '', youth: arr('youth-container'),
+            current_range: f.age_range_current || '', current: arr('current-container')
+        };
+    }
+    if (modules.includes('appearance')) {
+        out.appearance = {
+            hair: f.hair || '', eyes: f.eyes || '', skin: f.skin || '', face_style: f.face_style || '', build: arr('build-container'),
+            attire_formal: f.attire_formal || '', attire_business: f.attire_business || '', attire_casual: f.attire_casual || '', attire_home: f.attire_home || ''
+        };
+    }
+    if (modules.includes('personality')) {
+        out.personality = {
+            core_traits: arr('core-traits-container'), romantic_traits: arr('romantic-traits-container'), weakness: arr('weakness-container'),
+            likes: arr('likes-container'), dislikes: arr('dislikes-container'), goals: arr('goals-container')
+        };
+    }
+    if (modules.includes('user_relation')) {
+        out.user_relation = {
+            past_events: arr('past_events-container'), impression: arr('impression-container'), notes: arr('relation_notes-container')
+        };
+    }
+    if (modules.includes('behavior')) {
+        out.behavior = {
+            lifestyle: arr('lifestyle-container'), work_behaviors: arr('work-container'),
+            emotional_angry: f.emotional_angry || '', emotional_happy: f.emotional_happy || '', emotional_sad: f.emotional_sad || '',
+            boundaries: arr('boundaries-container'), work_skills: arr('work-skills-container'), life_skills: arr('life-skills-container'), hobby_skills: arr('hobby-skills-container')
+        };
+    }
+    if (modules.includes('speech')) {
+        out.speech = {
+            speech_with_user: f.speech_with_user || '', speech_reasoning: f.speech_reasoning || '', speech_accent: f.speech_accent || '', speech_online: f.speech_online || ''
+        };
+    }
+    if (modules.includes('extra')) {
+        out.extra = {
+            additional_notes: f.additional_notes || '', catchphrases: arr('catchphrase-container'), mannerisms: arr('mannerisms-container'),
+            trauma: arr('trauma-container'), values: arr('values-container'), conflicts: arr('conflicts-container'),
+            secrets: arr('secrets-container'), relationships: arr('relationships-container'), defining_moments: arr('defining-moments-container')
+        };
+    }
+    if (modules.includes('nsfw')) {
+        out.nsfw = {
+            experiences: f.nsfw_experiences || '', sexual_orientation: f.nsfw_orientation || '', sexual_role: arr('nsfw-role-container'),
+            sexual_habits: arr('nsfw-habits-container'), kinks: arr('kinks-container'), limits: arr('limits-container')
+        };
+    }
+
+    const cleaned = pruneEmptyDeep(out);
+    return Object.keys(cleaned).length ? JSON.stringify(cleaned, null, 2) : '';
+}
+
 const MODULE_LABELS = {
     basic: '基础信息', background: '背景故事', appearance: '外貌穿着',
     personality: '性格特质', user_relation: '{{user}}相关',
@@ -3448,6 +3543,7 @@ async function generateWithAI() {
     const persona = document.getElementById('aiPersona').value.trim();
     const trope = document.getElementById('aiTrope').value.trim();
     const sendTrope = document.getElementById('sendTropeToAi').checked;
+    const includeExistingContent = document.getElementById('includeExistingContentToAi')?.checked;
     const xpCore  = document.getElementById('aiXpCore').value.trim();
     const modules = getSelectedModules();
     const useStream = document.getElementById('enableStream').checked;
@@ -3479,15 +3575,20 @@ async function generateWithAI() {
 
     // 动态构建只含勾选模块的 JSON 格式说明
     const selectedSchema = modules.map(m => MODULE_JSON_SCHEMA[m] || '').filter(Boolean);
-    const schemaHeader = '请严格按照以下JSON格式回复，不要包含任何其他文字或markdown标记。\n只需填写被请求的模块，其余留空。列表字段提供2-5个条目，描述精炼有层次感。';
+    const schemaHeader = '请严格按照以下JSON格式回复，不要包含任何其他文字或markdown标记。\n只需填写被请求的模块，其余留空。列表字段提供2-5个条目，描述精炼有层次感。若表单已有部分内容，你需要进行参考并补全要求的内容。';
     const dynamicInstructions = schemaHeader + '\n\n{\n' + selectedSchema.join(',\n') + '\n}';
+
+    const existingRef = includeExistingContent ? buildExistingContentForModules(modules) : '';
+    const existingBlock = existingRef
+        ? `<existing_filled_content>\n以下是表单里已经写好的内容，请优先参考并保持设定一致，在此基础上补全缺失内容：\n${existingRef}\n</existing_filled_content>\n\n`
+        : '';
 
     const tropeBlock = (sendTrope && trope)
         ? `<trope>\n${trope}\n</trope>\n\n`
         : '';
 
     const systemMsg = `<persona>\n${persona}\n</persona>`;
-    const userMsg   = `${tropeBlock}<XP_core>\n${xpCore}\n</XP_core>\n\n<requested_modules>\n${moduleNames}\n</requested_modules>\n\n<module_guides>\n${guideTexts.join('\n\n')}\n</module_guides>\n\n<instructions>\n${dynamicInstructions}\n</instructions>`;
+    const userMsg   = `${tropeBlock}<XP_core>\n${xpCore}\n</XP_core>\n\n<requested_modules>\n${moduleNames}\n</requested_modules>\n\n${existingBlock}<module_guides>\n${guideTexts.join('\n\n')}\n</module_guides>\n\n<instructions>\n${dynamicInstructions}\n</instructions>`;
 
     try {
         if (useStream) {
