@@ -1078,6 +1078,11 @@
         <button type="button" class="btn-sync btn-sync-pull" onclick="restoreSyncForCurrentId()">☁️ 恢复同步</button>
         <button type="button" class="btn-sync btn-sync-upload" onclick="saveUploadForCurrentId()">☁️ 保存上传</button>
     </div>
+    <!-- 云同步安全提示 -->
+    <div style="background:#fff9ec;border:1px solid #fde68a;border-radius:8px;padding:9px 15px;margin-bottom:12px;font-size:0.82rem;color:#92400e;line-height:1.6;">
+        ⚠️ <strong>同步ID是你访问云端数据的唯一凭证，请务必设置复杂的字符串</strong>（建议混合大小写、数字、符号，20位以上）。ID一旦被他人猜到，云端数据将完全暴露。<br>
+        💡 <strong>不需要云同步？</strong>可直接忽略此栏，数据将仅保存在本地浏览器缓存中，无需设置同步ID。
+    </div>
 
     <!-- 角色管理栏 -->
     <div class="char-manager">
@@ -1782,6 +1787,10 @@
                     <div class="section-icon">🔌</div>
                     <h2>API 配置</h2>
                 </div>
+                <div style="background:#fff5f5;border:1px solid #ffb3b3;border-radius:8px;padding:10px 15px;margin-bottom:16px;font-size:0.875rem;color:#c0392b;line-height:1.6;">
+                    🔒 <strong>安全提示：API 地址和 API Key 不会上传到云端同步，仅保存在本地浏览器缓存中。</strong><br>
+                    请妥善保管你的 API Key，切勿将其分享给他人，也请定期检查 Key 的使用情况。
+                </div>
                 <div class="provider-manager">
                     <span class="char-manager-label">📡 API 供应商</span>
                     <select id="providerSelect" onchange="switchProvider(this.value)"></select>
@@ -2478,7 +2487,15 @@ function getCloudMetaConfigSnapshot() {
             nameNoDuplicate: getChecked('nameNoDuplicate', true),
         },
         ai: {
-            providers: getProviders(),
+            // ⚠️ 安全：API URL 和 Key 不上传云端，仅保留其他配置
+            providers: (() => {
+                const providers = getProviders();
+                const sanitized = {};
+                Object.entries(providers).forEach(([id, p]) => {
+                    sanitized[id] = { name: p.name || '', baseUrl: '', apiKey: '', selectedModel: p.selectedModel || '' };
+                });
+                return sanitized;
+            })(),
             currentProviderId: getCurrentProviderId(),
             selectedModel,
             persona: getVal('aiPersona', ''),
@@ -2512,12 +2529,8 @@ function applyCloudMetaConfig(cfg) {
         }
 
         if (cfg.ai && typeof cfg.ai === 'object') {
-            if (cfg.ai.providers && typeof cfg.ai.providers === 'object') {
-                localStorage.setItem(LS_AI_PROVIDERS, JSON.stringify(cfg.ai.providers));
-            }
-            if (cfg.ai.currentProviderId) {
-                localStorage.setItem(LS_AI_CURRENT_P, String(cfg.ai.currentProviderId));
-            }
+            // ⚠️ 安全：不从云端恢复 providers（内含 API URL/Key），保持本地配置不变
+            // if (cfg.ai.providers ...) -- 跳过，API 配置只在本地缓存
             if (cfg.ai.selectedModel !== undefined) selectedModel = cfg.ai.selectedModel || '';
 
             const setVal = (id, val) => {
@@ -2678,16 +2691,10 @@ function ensureSyncIdSystem() {
         const legacy = (localStorage.getItem(LS_SYNC_USER) || '').trim();
         if (legacy) ids = [legacy];
     }
-    if (ids.length === 0) {
-        let id = (prompt('请输入同步ID：') || '').trim();
-        if (!id) {
-            id = 'guest_' + Math.random().toString(36).slice(2, 8);
-            showToast('未输入ID，已使用临时ID：' + id);
-        }
-        ids = [id];
-    }
-    saveSyncIds(ids);
+    // 允许不设置同步ID，纯本地模式运行，不强制弹窗
+    if (ids.length === 0) return;
 
+    saveSyncIds(ids);
     let current = getCurrentSyncId();
     if (!ids.includes(current)) current = ids[0];
     setCurrentSyncId(current);
@@ -2700,7 +2707,7 @@ function switchSyncId(newId) {
 }
 
 function addSyncId() {
-    const input = (prompt('请输入新的同步ID：') || '').trim();
+    const input = (prompt('请输入新的同步ID：\n\n⚠️ 安全提示：同步ID是你访问云端数据的唯一凭证，请使用复杂的字符串（建议混合大小写字母、数字、符号，20位以上），切勿使用简单词语，否则可能被他人猜到并访问你的数据！') || '').trim();
     if (!input) return;
     const ids = getSyncIds();
     if (ids.includes(input)) {
