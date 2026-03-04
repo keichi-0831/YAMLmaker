@@ -1064,7 +1064,6 @@
 <div class="container">
     <header>
         <h1>人设卡生成器</h1>
-        <p id="adminViewCount" style="font-size: 0.85rem; color: #888; margin-top: 5px; display: none;">访问总人数：<span id="viewCountNumber">...</span></p>
         <p>Day Mode · YAML Generator</p>
     </header>
 
@@ -1788,10 +1787,9 @@
                     <h2>API 配置</h2>
                 </div>
                 <div style="background:#fff5f5;border:1px solid #ffb3b3;border-radius:8px;padding:10px 15px;margin-bottom:16px;font-size:0.875rem;color:#c0392b;line-height:1.6;">
-    🔒 <strong>云同步安全提示：API 地址和 API Key 不会上传到云端同步，仅保存在本地浏览器缓存中。</strong><br>
-                    请妥善保管你的 API Key，切勿将其分享给他人，也请定期检查 Key 的使用情况。<br>
-                    若未开启云同步模式，忽略提示即可。
-                    </div>
+                    🔒 <strong>云同步安全提示：API 地址和 API Key 不会上传到云端同步，仅保存在本地浏览器缓存中。</strong><br>
+                    请妥善保管你的 API Key，切勿将其分享给他人，也请定期检查 Key 的使用情况。<br>如未开启云同步模式，忽略此提示即可。
+                </div>
                 <div class="provider-manager">
                     <span class="char-manager-label">📡 API 供应商</span>
                     <select id="providerSelect" onchange="switchProvider(this.value)"></select>
@@ -2722,23 +2720,48 @@ function addSyncId() {
     showToast('✨ 已新增并切换到ID：' + input + '，可手动“恢复同步”或“保存上传”');
 }
 
-function deleteSyncId() {
+async function deleteSyncId() {
     const current = getCurrentSyncId();
     if (!current) return;
     const ids = getSyncIds();
-    if (!confirm(`确定删除同步ID「${current}」吗？\n仅删除本地ID列表，不会清除云端数据。`)) return;
+
+    if (!confirm(`确定要删除同步ID「${current}」吗？`)) return;
+
+    const alsoDeleteCloud = confirm(
+        `是否同时删除该ID在云端的所有数据？\n\n` +
+        `【确定】= 删本地ID + 彻底清除云端数据（不可恢复！）\n` +
+        `【取消】= 只删本地ID列表，云端数据保留`
+    );
+
+    if (alsoDeleteCloud) {
+        initSupabaseClient();
+        if (supabaseClient) {
+            showToast('🗑️ 正在清除云端数据…');
+            const { error } = await supabaseClient
+                .from('character_cards')
+                .delete()
+                .eq('user_id', current);
+            if (error) {
+                showToast('❌ 云端数据删除失败：' + error.message);
+                return;
+            }
+        } else {
+            showToast('⚠️ 未连接云端，跳过云端删除，仅删本地ID');
+        }
+    }
+
     const nextIds = ids.filter(id => id !== current);
     saveSyncIds(nextIds);
     if (nextIds.length > 0) {
         setCurrentSyncId(nextIds[0]);
-        showToast('🗑️ 已删除ID，已切换到：' + nextIds[0]);
+        showToast(alsoDeleteCloud ? '☁️🗑️ 已删除ID并清除云端数据，已切换到：' + nextIds[0] : '🗑️ 已删除ID，已切换到：' + nextIds[0]);
     } else {
         localStorage.removeItem(LS_SYNC_USER_CURRENT);
         localStorage.removeItem(LS_SYNC_USER);
         syncUserId = '';
         updateCurrentSyncIdDisplay();
         renderSyncIdSelect();
-        showToast('🗑️ 已删除全部同步ID，当前为纯本地模式');
+        showToast(alsoDeleteCloud ? '☁️🗑️ 已彻底清除云端数据，当前为纯本地模式' : '🗑️ 已删除全部同步ID，当前为纯本地模式');
     }
 }
 
@@ -2750,7 +2773,6 @@ async function restoreSyncForCurrentId() {
     if (!confirm('恢复同步将以云端数据覆盖当前浏览器本地缓存。确定继续吗？')) return;
     await pullCloudCharacters(true);
     hasPendingCloudChanges = false;
-    await updateAdminViewCount();
 }
 
 async function saveUploadForCurrentId() {
@@ -2906,24 +2928,6 @@ async function trackUniqueVisitor() {
     if (error) console.warn('[Visitor Insert Error]', error.message);
 }
 
-async function updateAdminViewCount() {
-    const adminEl = document.getElementById('adminViewCount');
-    const numEl = document.getElementById('viewCountNumber');
-    if (!adminEl || !numEl) return;
-
-    if (!supabaseClient || syncUserId !== 'Keichiiii') {
-        adminEl.style.display = 'none';
-        return;
-    }
-
-    adminEl.style.display = 'block';
-    const { count, error } = await supabaseClient
-        .from('page_views')
-        .select('*', { count: 'exact', head: true });
-
-    numEl.textContent = error ? '获取失败' : String(count || 0);
-}
-
 async function initCloudSync() {
     initSupabaseClient();
     ensureSyncIdSystem();
@@ -2933,7 +2937,6 @@ async function initCloudSync() {
     if (!supabaseClient || !syncUserId) return;
 
     await trackUniqueVisitor();
-    await updateAdminViewCount();
 }
 
 function renderInspoTags() {
