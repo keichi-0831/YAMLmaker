@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>人设卡生成器</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
     <style>
         :root {
             --primary-color: #5e60ce;
@@ -35,6 +36,68 @@
         header { text-align: center; margin-bottom: 20px; }
         header h1 { font-size: 2rem; color: var(--primary-color); margin-bottom: 8px; letter-spacing: 1px; }
         header p { color: var(--text-sub); font-size: 0.95rem; }
+
+        /* ===== 同步ID管理栏 ===== */
+        .sync-id-manager {
+            background: var(--card-bg);
+            padding: 12px 20px;
+            border-radius: var(--radius-md);
+            margin-bottom: 12px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .sync-id-label {
+            font-weight: 700;
+            color: var(--text-sub);
+            white-space: nowrap;
+            font-size: 0.9rem;
+        }
+        .sync-id-current {
+            color: var(--text-main);
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        #currentSyncIdText {
+            color: var(--primary-color);
+            font-family: Consolas, monospace;
+            background: #f8f9ff;
+            border: 1px solid #e4e5ff;
+            border-radius: 6px;
+            padding: 2px 8px;
+        }
+        #syncIdSelect {
+            min-width: 170px;
+            padding: 8px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            font-size: 0.9rem;
+            color: var(--primary-color);
+            font-weight: 600;
+            background: var(--input-bg);
+            cursor: pointer;
+        }
+        .btn-sync {
+            border: none;
+            cursor: pointer;
+            padding: 7px 13px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            transition: all 0.18s;
+            white-space: nowrap;
+        }
+        .btn-sync-add { background: var(--primary-color); color: #fff; }
+        .btn-sync-add:hover { background: #4e50bf; }
+        .btn-sync-del { background: #fff0f0; color: #e17055; border: 1px solid #fab1a0; }
+        .btn-sync-del:hover { background: #ffe0e0; }
+        .btn-sync-pull { background: #f0f0f0; color: var(--text-main); }
+        .btn-sync-pull:hover { background: #e0e0e0; }
 
         /* ===== 角色管理栏 ===== */
         .char-manager {
@@ -163,6 +226,49 @@
         }
         .tab-btn:hover { background: #e1e1e1; }
         .tab-btn.active { background: var(--primary-color); color: #fff; box-shadow: 0 4px 10px rgba(94, 96, 206, 0.3); }
+
+        /* ===== 本次灵感 ===== */
+        .current-inspo-bar {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow);
+            padding: 14px 18px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .current-inspo-label {
+            font-weight: 700;
+            color: var(--text-sub);
+            white-space: nowrap;
+            padding-top: 2px;
+        }
+        .current-inspo-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            flex: 1;
+            min-height: 28px;
+        }
+        .current-inspo-empty {
+            color: #b2bec3;
+            font-size: 0.88rem;
+        }
+        .current-inspo-tag {
+            display: inline-flex;
+            align-items: center;
+            background: #fff;
+            border: 2px solid var(--primary-color);
+            color: var(--primary-color);
+            padding: 4px 12px;
+            border-radius: 18px;
+            font-size: 0.85rem;
+            font-weight: 700;
+            line-height: 1.2;
+        }
 
         /* ===== Content Cards ===== */
         .card-section {
@@ -394,6 +500,12 @@
             transition: background 0.15s;
         }
         .inspo-tag:hover { background: #c8c9ff; }
+        .inspo-tag.selected {
+            background: var(--primary-color);
+            color: #fff;
+            box-shadow: 0 2px 8px rgba(94, 96, 206, 0.25);
+        }
+        .inspo-tag.selected .inspo-tag-del { color: #fff; opacity: 0.8; }
         .inspo-tag-del {
             cursor: pointer;
             color: #a29bfe;
@@ -950,8 +1062,19 @@
 <div class="container">
     <header>
         <h1>人设卡生成器</h1>
+        <p id="adminViewCount" style="font-size: 0.85rem; color: #888; margin-top: 5px; display: none;">访问总人数：<span id="viewCountNumber">...</span></p>
         <p>Day Mode · YAML Generator</p>
     </header>
+
+    <!-- 同步ID管理栏 -->
+    <div class="sync-id-manager">
+        <span class="sync-id-label">🔐 云同步ID</span>
+        <span class="sync-id-current">当前id：<code id="currentSyncIdText">-</code></span>
+        <select id="syncIdSelect" onchange="switchSyncId(this.value)"></select>
+        <button type="button" class="btn-sync btn-sync-add" onclick="addSyncId()">＋ 新增ID</button>
+        <button type="button" class="btn-sync btn-sync-del" onclick="deleteSyncId()">🗑️ 删除ID</button>
+        <button type="button" class="btn-sync btn-sync-pull" onclick="reloadCloudForCurrentId()">☁️ 拉取云端</button>
+    </div>
 
     <!-- 角色管理栏 -->
     <div class="char-manager">
@@ -994,6 +1117,13 @@
         <button class="tab-btn" data-tab="nsfw">🔞 NSFW</button>
         <button class="tab-btn" data-tab="inspo">✨ 灵感池</button>
         <button class="tab-btn" data-tab="ai">🤖 AI 辅助</button>
+    </div>
+
+    <div class="current-inspo-bar" id="currentInspoBar">
+        <span class="current-inspo-label">🧩 灵感时刻</span>
+        <div class="current-inspo-tags" id="currentInspoTags">
+            <span class="current-inspo-empty">尚未选择灵感词条</span>
+        </div>
     </div>
 
     <form id="characterForm">
@@ -1562,7 +1692,7 @@
                     </div>
                 </div>
                 <div class="inspo-roll-box">
-                    <h3>🎲 随机灵感</h3>
+                    <h3>💡 灵感时刻</h3>
                     <div class="inspo-roll-result" id="inspoRollResult">
                         <span class="inspo-roll-empty">点击下方按钮，随机抽取灵感词～</span>
                     </div>
@@ -1572,6 +1702,7 @@
                             <input type="number" id="rollCount" value="4" min="1" max="10">
                         </div>
                         <button type="button" class="btn-roll" onclick="rollInspo()">✨ Roll！</button>
+                        <button type="button" class="btn-inspo-import" onclick="clearCurrentInspo()">清空灵感时刻</button>
                     </div>
                 </div>
             </div>
@@ -1694,6 +1825,18 @@
                 </div>
 
                 <div class="ai-block">
+                    <div class="ai-block-label">
+                        <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;">
+                            <input type="checkbox" id="sendTropeToAi" checked style="accent-color: var(--primary-color);">
+                            <span class="ai-tag-badge">trope</span>
+                            本次随机灵感（可选发送给 AI）
+                        </label>
+                    </div>
+                    <div class="ai-block-hint">内容来自【✨ 灵感池】→【💡 灵感时刻】（可 Roll、可手动点选、可清空）</div>
+                    <textarea id="aiTrope" rows="2" readonly placeholder="尚未选择灵感词条"></textarea>
+                </div>
+
+                <div class="ai-block">
                     <div class="ai-block-label"><span class="ai-tag-badge">XP_core</span> 这次我想要…</div>
                     <div class="ai-block-hint">尽量详细描述：想看的场景、角色的身份性格、你的癖好标签、和 {{user}} 的关系等</div>
                     <textarea id="aiXpCore" rows="5" placeholder="例如：一个外表高冷内心软糯的外科医生，和user是青梅竹马，破镜重圆的关系，有点占有欲但从不主动说出口…"></textarea>
@@ -1796,6 +1939,22 @@
                         <div class="ai-guide-body">
                             <div class="ai-guide-hint">引导AI补充角色的口头禅、小动作、创伤、秘密等深层细节</div>
                             <textarea id="guide_extra">请补充角色的深层细节：1-2个口头禅/习惯用语、2-3个习惯性小动作、心理创伤或阴影（如有）、核心价值观/信念、内心矛盾/冲突、不为人知的秘密、重要人际关系、以及1-2个决定性时刻/关键记忆。这些细节要和背景故事呼应，让角色更加立体。</textarea>
+                        </div>
+                    </div>
+
+                    <div class="ai-guide-module">
+                        <label class="ai-guide-header">
+                            <input type="checkbox" name="aiModule" value="nsfw">
+                            <span class="guide-tag">nsfw</span>
+                            <span class="guide-title">🔞 NSFW 信息</span>
+                        </label>
+                        <div class="ai-guide-body">
+                            <div class="ai-guide-hint">引导AI生成 NSFW 相关设定（性经验、偏好、雷区等）</div>
+                            <textarea id="guide_nsfw">请补全角色的NSFW信息，保持成人向虚构创作语境：
+1) 性相关特征：性经验、性取向、性爱角色/定位（2-4条）、性爱习惯（2-4条）；
+2) 性癖/Kinks：给出3-8条偏好关键词或短句；
+3) 雷区/禁止事项（Limits）：给出3-8条明确边界。
+描述保持可用于角色卡的结构化表达，避免空泛。</textarea>
                         </div>
                     </div>
                 </div>
@@ -1992,6 +2151,17 @@ const ARRAY_DEFS = [
 const LS_CHARS    = 'rp_characters';
 const LS_CURRENT  = 'rp_current_char';
 const LS_INSPO    = 'rp_inspo_pool';
+const LS_INSPO_LAST_ROLL = 'rp_inspo_last_roll';
+const LS_SYNC_USER = 'sync_user_id';
+const LS_SYNC_USERS = 'sync_user_ids';
+const LS_SYNC_USER_CURRENT = 'sync_user_id_current';
+const LS_VISITOR_ID = 'unique_visitor_id';
+
+const SUPABASE_URL = 'https://cukfyqnrsrikimipbyrh.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN1a2Z5cW5yc3Jpa2ltaXBieXJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2MjY2MTEsImV4cCI6MjA4ODIwMjYxMX0.Dj7zH_OGJZ5X2jJolRXx4nTnOKN4_rUnRvboUm0-OoU';
+
+let supabaseClient = null;
+let syncUserId = '';
 
 // ============================================================
 //  角色管理
@@ -2181,7 +2351,10 @@ function triggerAutoSave() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
         const id = getCurrentId();
-        if (id) saveCurrentCharData(id);
+        if (id) {
+            saveCurrentCharData(id);
+            syncCurrentCharacterToCloud(id);
+        }
         setSaveStatus('saved');
     }, 900);
 }
@@ -2248,9 +2421,277 @@ function getInspoPool() {
     try { return JSON.parse(localStorage.getItem(LS_INSPO)) || []; } catch(e) { return []; }
 }
 function saveInspoPool(pool) { localStorage.setItem(LS_INSPO, JSON.stringify(pool)); }
+function getLastRolledInspo() {
+    try { return JSON.parse(localStorage.getItem(LS_INSPO_LAST_ROLL)) || []; } catch(e) { return []; }
+}
+function saveLastRolledInspo(words) {
+    localStorage.setItem(LS_INSPO_LAST_ROLL, JSON.stringify(words || []));
+}
+
+function renderCurrentInspoDisplay() {
+    const words = getLastRolledInspo();
+    const container = document.getElementById('currentInspoTags');
+    if (!container) return;
+    container.innerHTML = '';
+    if (!words.length) {
+        container.innerHTML = '<span class="current-inspo-empty">尚未选择灵感词条</span>';
+    } else {
+        words.forEach(word => {
+            const tag = document.createElement('span');
+            tag.className = 'current-inspo-tag';
+            tag.textContent = word;
+            container.appendChild(tag);
+        });
+    }
+    syncTropeFromCurrentInspo();
+}
+
+function syncTropeFromCurrentInspo() {
+    const trope = document.getElementById('aiTrope');
+    if (!trope) return;
+    const words = getLastRolledInspo();
+    trope.value = words.join(' / ');
+}
+
+// ============================================================
+//  Supabase 同步 & 访客统计
+// ============================================================
+function initSupabaseClient() {
+    if (supabaseClient) return supabaseClient;
+    if (!window.supabase || !window.supabase.createClient) return null;
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    return supabaseClient;
+}
+
+function getSyncIds() {
+    try {
+        const arr = JSON.parse(localStorage.getItem(LS_SYNC_USERS));
+        if (!Array.isArray(arr)) return [];
+        return [...new Set(arr.map(v => String(v || '').trim()).filter(Boolean))];
+    } catch(e) {
+        return [];
+    }
+}
+
+function saveSyncIds(ids) {
+    const clean = [...new Set((ids || []).map(v => String(v || '').trim()).filter(Boolean))];
+    localStorage.setItem(LS_SYNC_USERS, JSON.stringify(clean));
+}
+
+function getCurrentSyncId() {
+    return (localStorage.getItem(LS_SYNC_USER_CURRENT) || localStorage.getItem(LS_SYNC_USER) || '').trim();
+}
+
+function updateCurrentSyncIdDisplay() {
+    const el = document.getElementById('currentSyncIdText');
+    if (!el) return;
+    el.textContent = syncUserId || '-';
+}
+
+function renderSyncIdSelect() {
+    const sel = document.getElementById('syncIdSelect');
+    if (!sel) return;
+    const ids = getSyncIds();
+    const current = getCurrentSyncId();
+    sel.innerHTML = '';
+    ids.forEach(id => {
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = id;
+        if (id === current) opt.selected = true;
+        sel.appendChild(opt);
+    });
+}
+
+function setCurrentSyncId(id) {
+    const val = String(id || '').trim();
+    localStorage.setItem(LS_SYNC_USER_CURRENT, val);
+    // 向后兼容旧版本读取
+    localStorage.setItem(LS_SYNC_USER, val);
+    syncUserId = val;
+    updateCurrentSyncIdDisplay();
+    renderSyncIdSelect();
+}
+
+function ensureSyncIdSystem() {
+    let ids = getSyncIds();
+    if (ids.length === 0) {
+        const legacy = (localStorage.getItem(LS_SYNC_USER) || '').trim();
+        if (legacy) ids = [legacy];
+    }
+    if (ids.length === 0) {
+        let id = (prompt('请输入同步ID：') || '').trim();
+        if (!id) {
+            id = 'guest_' + Math.random().toString(36).slice(2, 8);
+            showToast('未输入ID，已使用临时ID：' + id);
+        }
+        ids = [id];
+    }
+    saveSyncIds(ids);
+
+    let current = getCurrentSyncId();
+    if (!ids.includes(current)) current = ids[0];
+    setCurrentSyncId(current);
+}
+
+function switchSyncId(newId) {
+    if (!newId || newId === getCurrentSyncId()) return;
+    setCurrentSyncId(newId);
+    reloadCloudForCurrentId();
+}
+
+function addSyncId() {
+    const input = (prompt('请输入新的同步ID：') || '').trim();
+    if (!input) return;
+    const ids = getSyncIds();
+    if (ids.includes(input)) {
+        setCurrentSyncId(input);
+        showToast('该ID已存在，已切换到此ID');
+        reloadCloudForCurrentId();
+        return;
+    }
+    ids.push(input);
+    saveSyncIds(ids);
+    setCurrentSyncId(input);
+    showToast('✨ 已新增并切换到ID：' + input);
+    reloadCloudForCurrentId();
+}
+
+function deleteSyncId() {
+    const current = getCurrentSyncId();
+    if (!current) return;
+    const ids = getSyncIds();
+    if (ids.length <= 1) {
+        alert('至少保留一个同步ID！');
+        return;
+    }
+    if (!confirm(`确定删除同步ID「${current}」吗？\n仅删除本地ID列表，不会清除云端数据。`)) return;
+    const nextIds = ids.filter(id => id !== current);
+    saveSyncIds(nextIds);
+    setCurrentSyncId(nextIds[0]);
+    showToast('🗑️ 已删除ID，已切换到：' + nextIds[0]);
+    reloadCloudForCurrentId();
+}
+
+async function reloadCloudForCurrentId() {
+    initSupabaseClient();
+    syncUserId = getCurrentSyncId();
+    updateCurrentSyncIdDisplay();
+    if (!supabaseClient || !syncUserId) return;
+    await pullCloudCharacters();
+    await updateAdminViewCount();
+}
+
+function normalizeCloudChar(charId, charData) {
+    if (charData && typeof charData === 'object' && 'name' in charData && 'data' in charData) {
+        return charData;
+    }
+    return {
+        name: `云端角色-${String(charId).slice(-4)}`,
+        data: (charData && typeof charData === 'object') ? charData : {}
+    };
+}
+
+async function pullCloudCharacters() {
+    if (!supabaseClient || !syncUserId) return;
+    const { data, error } = await supabaseClient
+        .from('character_cards')
+        .select('char_id,char_data')
+        .eq('user_id', syncUserId);
+
+    if (error) {
+        console.warn('[Cloud Pull Error]', error.message);
+        return;
+    }
+    if (!data || data.length === 0) return;
+
+    const chars = getChars();
+    data.forEach(row => {
+        if (!row?.char_id) return;
+        chars[row.char_id] = normalizeCloudChar(row.char_id, row.char_data);
+    });
+
+    saveChars(chars);
+    const firstId = Object.keys(chars)[0];
+    if (firstId) {
+        setCurrentId(firstId);
+        renderCharSelect(chars, firstId);
+        loadCharacter(firstId);
+    }
+    showToast(`☁️ 已同步 ${data.length} 个云端角色`);
+}
+
+function syncCurrentCharacterToCloud(charId) {
+    if (!supabaseClient || !syncUserId || !charId) return;
+    const chars = getChars();
+    const charData = chars[charId];
+    if (!charData) return;
+
+    supabaseClient
+        .from('character_cards')
+        .upsert([
+            { user_id: syncUserId, char_id: charId, char_data: charData }
+        ], { onConflict: 'user_id,char_id' })
+        .then(({ error }) => {
+            if (error) console.warn('[Cloud Upsert Error]', error.message);
+        });
+}
+
+function getOrCreateVisitorId() {
+    let visitorId = localStorage.getItem(LS_VISITOR_ID);
+    if (!visitorId) {
+        visitorId = 'visitor_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
+        localStorage.setItem(LS_VISITOR_ID, visitorId);
+    }
+    return visitorId;
+}
+
+async function trackUniqueVisitor() {
+    if (!supabaseClient) return;
+    const existed = !!localStorage.getItem(LS_VISITOR_ID);
+    const visitorId = getOrCreateVisitorId();
+    if (existed) return;
+
+    const { error } = await supabaseClient
+        .from('page_views')
+        .insert([{ visitor_id: visitorId }]);
+    if (error) console.warn('[Visitor Insert Error]', error.message);
+}
+
+async function updateAdminViewCount() {
+    const adminEl = document.getElementById('adminViewCount');
+    const numEl = document.getElementById('viewCountNumber');
+    if (!adminEl || !numEl) return;
+
+    if (!supabaseClient || syncUserId !== 'Keichiiii') {
+        adminEl.style.display = 'none';
+        return;
+    }
+
+    adminEl.style.display = 'block';
+    const { count, error } = await supabaseClient
+        .from('page_views')
+        .select('*', { count: 'exact', head: true });
+
+    numEl.textContent = error ? '获取失败' : String(count || 0);
+}
+
+async function initCloudSync() {
+    initSupabaseClient();
+    ensureSyncIdSystem();
+    syncUserId = getCurrentSyncId();
+    updateCurrentSyncIdDisplay();
+    renderSyncIdSelect();
+    if (!supabaseClient || !syncUserId) return;
+
+    await trackUniqueVisitor();
+    await pullCloudCharacters();
+    await updateAdminViewCount();
+}
 
 function renderInspoTags() {
     const pool = getInspoPool();
+    const current = getLastRolledInspo();
     const container = document.getElementById('inspoTags');
     container.innerHTML = '';
     if (pool.length === 0) {
@@ -2259,8 +2700,10 @@ function renderInspoTags() {
     }
     pool.forEach((word, i) => {
         const tag = document.createElement('span');
-        tag.className = 'inspo-tag';
-        tag.innerHTML = `${escapeHtml(word)}<span class="inspo-tag-del" onclick="removeInspoWord(${i})" title="删除">×</span>`;
+        const selectedClass = current.includes(word) ? ' selected' : '';
+        tag.className = 'inspo-tag' + selectedClass;
+        tag.onclick = () => toggleCurrentInspoWord(word);
+        tag.innerHTML = `${escapeHtml(word)}<span class="inspo-tag-del" onclick="removeInspoWord(${i}, event)" title="删除">×</span>`;
         container.appendChild(tag);
     });
 }
@@ -2276,13 +2719,40 @@ function addInspoWord() {
 
 function inspoInputKeydown(e) { if (e.key === 'Enter') { e.preventDefault(); addInspoWord(); } }
 
-function removeInspoWord(index) {
-    const pool = getInspoPool(); pool.splice(index, 1); saveInspoPool(pool); renderInspoTags();
+function removeInspoWord(index, event) {
+    if (event) event.stopPropagation();
+    const pool = getInspoPool();
+    const removed = pool[index];
+    pool.splice(index, 1);
+    saveInspoPool(pool);
+    const current = getLastRolledInspo().filter(w => w !== removed);
+    saveLastRolledInspo(current);
+    renderInspoTags();
+    renderCurrentInspoDisplay();
+}
+
+function toggleCurrentInspoWord(word) {
+    const current = getLastRolledInspo();
+    const idx = current.indexOf(word);
+    if (idx >= 0) current.splice(idx, 1);
+    else current.push(word);
+    saveLastRolledInspo(current);
+    renderInspoTags();
+    renderCurrentInspoDisplay();
+}
+
+function clearCurrentInspo() {
+    saveLastRolledInspo([]);
+    renderInspoTags();
+    renderCurrentInspoDisplay();
+    showToast('🧹 已清空灵感时刻');
 }
 
 function clearInspoPool() {
     if (!confirm('确定清空所有灵感词汇吗？')) return;
     saveInspoPool([]); renderInspoTags();
+    saveLastRolledInspo([]);
+    renderCurrentInspoDisplay();
     document.getElementById('inspoRollResult').innerHTML = '<span class="inspo-roll-empty">词库已清空</span>';
 }
 
@@ -2332,6 +2802,8 @@ function rollInspo() {
         [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
     const picked = shuffled.slice(0, count);
+    saveLastRolledInspo(picked);
+    renderCurrentInspoDisplay();
     const result = document.getElementById('inspoRollResult');
     result.innerHTML = '';
     picked.forEach((word, i) => {
@@ -2599,7 +3071,8 @@ function getSelectedModules() {
 const MODULE_LABELS = {
     basic: '基础信息', background: '背景故事', appearance: '外貌穿着',
     personality: '性格特质', user_relation: '{{user}}相关',
-    behavior: '行为习惯', speech: '说话风格', extra: '额外补充'
+    behavior: '行为习惯', speech: '说话风格', extra: '额外补充',
+    nsfw: '🔞 NSFW信息'
 };
 
 const MODULE_JSON_SCHEMA = {
@@ -2611,6 +3084,7 @@ const MODULE_JSON_SCHEMA = {
     behavior: `  "behavior": { "lifestyle":[], "work_behaviors":[], "emotional_angry":"", "emotional_happy":"", "emotional_sad":"", "boundaries":[], "work_skills":[], "life_skills":[], "hobby_skills":[] }`,
     speech: `  "speech": { "speech_with_user":"", "speech_reasoning":"", "speech_accent":"", "speech_online":"" }`,
     extra: `  "extra": { "additional_notes":"", "catchphrases":[], "mannerisms":[], "trauma":[], "values":[], "conflicts":[], "secrets":[], "relationships":[], "defining_moments":[] }`,
+    nsfw: `  "nsfw": { "experiences":"", "sexual_orientation":"", "sexual_role":[], "sexual_habits":[], "kinks":[], "limits":[] }`,
 };
 
 // ── JSON预览折叠控制 ──────────────────────────────────────
@@ -2686,7 +3160,7 @@ function extractJsonFromText(rawText) {
 
     // 如果整体解析失败，用正则逐块提取各模块
     const result = {};
-    const moduleKeys = ['basic', 'background', 'appearance', 'personality', 'user_relation', 'behavior', 'speech', 'extra'];
+    const moduleKeys = ['basic', 'background', 'appearance', 'personality', 'user_relation', 'behavior', 'speech', 'extra', 'nsfw'];
 
     for (let i = 0; i < moduleKeys.length; i++) {
         const key = moduleKeys[i];
@@ -2737,6 +3211,8 @@ async function generateWithAI() {
     const baseUrl = document.getElementById('aiBaseUrl').value.trim().replace(/\/+$/, '');
     const apiKey  = document.getElementById('aiApiKey').value.trim();
     const persona = document.getElementById('aiPersona').value.trim();
+    const trope = document.getElementById('aiTrope').value.trim();
+    const sendTrope = document.getElementById('sendTropeToAi').checked;
     const xpCore  = document.getElementById('aiXpCore').value.trim();
     const modules = getSelectedModules();
     const useStream = document.getElementById('enableStream').checked;
@@ -2771,8 +3247,12 @@ async function generateWithAI() {
     const schemaHeader = '请严格按照以下JSON格式回复，不要包含任何其他文字或markdown标记。\n只需填写被请求的模块，其余留空。列表字段提供2-5个条目，描述精炼有层次感。';
     const dynamicInstructions = schemaHeader + '\n\n{\n' + selectedSchema.join(',\n') + '\n}';
 
+    const tropeBlock = (sendTrope && trope)
+        ? `<trope>\n${trope}\n</trope>\n\n`
+        : '';
+
     const systemMsg = `<persona>\n${persona}\n</persona>`;
-    const userMsg   = `<XP_core>\n${xpCore}\n</XP_core>\n\n<requested_modules>\n${moduleNames}\n</requested_modules>\n\n<module_guides>\n${guideTexts.join('\n\n')}\n</module_guides>\n\n<instructions>\n${dynamicInstructions}\n</instructions>`;
+    const userMsg   = `${tropeBlock}<XP_core>\n${xpCore}\n</XP_core>\n\n<requested_modules>\n${moduleNames}\n</requested_modules>\n\n<module_guides>\n${guideTexts.join('\n\n')}\n</module_guides>\n\n<instructions>\n${dynamicInstructions}\n</instructions>`;
 
     try {
         if (useStream) {
@@ -3034,6 +3514,15 @@ function fillFormFromAI() {
         fillArray('defining-moments-container', 'defining-moments-item', d.extra.defining_moments, true);
         filled.push('额外补充');
     }
+    if (d.nsfw) {
+        setVal('nsfw_experiences', d.nsfw.experiences);
+        setVal('nsfw_orientation', d.nsfw.sexual_orientation);
+        fillArray('nsfw-role-container', 'nsfw-role-item', d.nsfw.sexual_role, true);
+        fillArray('nsfw-habits-container', 'nsfw-habits-item', d.nsfw.sexual_habits, true);
+        fillArray('kinks-container', 'kinks-item', d.nsfw.kinks, false);
+        fillArray('limits-container', 'limits-item', d.nsfw.limits, false);
+        filled.push('🔞 NSFW信息');
+    }
 
     triggerAutoSave();
     showToast(`✨ 已填入：${filled.join('、')}`);
@@ -3267,10 +3756,12 @@ document.getElementById('namerImportModal').addEventListener('click', e => { if 
 // ============================================================
 initCharSystem();
 renderInspoTags();
+renderCurrentInspoDisplay();
 renderNamerTags('surname');
 renderNamerTags('charname');
 initProviderSystem();
 bindModuleCheckboxes();
+initCloudSync();
 </script>
 </body>
 </html>
