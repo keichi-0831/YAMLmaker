@@ -2725,15 +2725,20 @@ function deleteSyncId() {
     const current = getCurrentSyncId();
     if (!current) return;
     const ids = getSyncIds();
-    if (ids.length <= 1) {
-        alert('至少保留一个同步ID！');
-        return;
-    }
     if (!confirm(`确定删除同步ID「${current}」吗？\n仅删除本地ID列表，不会清除云端数据。`)) return;
     const nextIds = ids.filter(id => id !== current);
     saveSyncIds(nextIds);
-    setCurrentSyncId(nextIds[0]);
-    showToast('🗑️ 已删除ID，已切换到：' + nextIds[0]);
+    if (nextIds.length > 0) {
+        setCurrentSyncId(nextIds[0]);
+        showToast('🗑️ 已删除ID，已切换到：' + nextIds[0]);
+    } else {
+        localStorage.removeItem(LS_SYNC_USER_CURRENT);
+        localStorage.removeItem(LS_SYNC_USER);
+        syncUserId = '';
+        updateCurrentSyncIdDisplay();
+        renderSyncIdSelect();
+        showToast('🗑️ 已删除全部同步ID，当前为纯本地模式');
+    }
 }
 
 async function restoreSyncForCurrentId() {
